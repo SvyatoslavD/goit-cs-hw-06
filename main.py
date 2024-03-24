@@ -13,17 +13,24 @@ from concurrent import futures
 import pymongo
 import json
 
+
+MONGO_DB_URI = "mongodb://mongo_db:27017/"
+HTTP_SERVER_PORT = 3000
+SOCKET_SERVER_PORT = 5000
+MESSAGE_SIZE_MAX = 1024
+
+
 class HttpHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         data = self.rfile.read(int(self.headers['Content-Length']))
-        print(data)
         data_parse = urllib.parse.unquote_plus(data.decode())
-        print(data_parse)
+
         data_dict = {key: value for key, value in [
             el.split('=') for el in data_parse.split('&')]}
         data_dict["date"] = str(datetime.now())
-        print(data_dict)
+
         self.__send_request(str(data_dict))
+
         self.send_response(302)
         self.send_header('Location', '/')
         self.end_headers()
@@ -59,64 +66,44 @@ class HttpHandler(BaseHTTPRequestHandler):
             self.wfile.write(file.read())
 
     def __send_request(self, message):
-        TCP_IP = 'localhost'
-        TCP_PORT = 5000
-        #MESSAGE = "Python Web development"
-
-        def run_client(ip: str, port: int, message):
+        def send_message(message):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                server = ip, port
-
+                server = 'localhost', SOCKET_SERVER_PORT
                 sock.connect(server)
                 print(f'Connection established {server}')
 
                 sock.send(message.encode())
 
-                #response = sock.recv(1024)
-                #print(f'Response data: {response.decode()}')
-
-                # print(f'Connection established {server}')
-                # for line in message.split(' '):
-                #    print(f'Send data: {line}')
-                #    sock.send(line.encode())
-                #    response = sock.recv(1024)
-                #    print(f'Response data: {response.decode()}')
-
             print(f'Data transfer completed')
-            #return response
 
-        run_client(TCP_IP, TCP_PORT, message)
+        print(f'Sending {message} to the socket server')
+        send_message(message)
 
 
 class SocketServer:
-    def __init__(self, ip='localhost', port=5000) -> None:
+    def __init__(self):
         self.__server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.__server_socket.bind((ip, port))
+        self.__server_socket.bind(('localhost', SOCKET_SERVER_PORT))
         self.__server_socket.listen(10)
 
-        print(f'Start echo server {self.__server_socket.getsockname()}')
+        print(f'Start socket server {self.__server_socket.getsockname()}')
 
     def serve_forever(self):
         def handle(sock: socket.socket, address: str):
             print(f'Connection established {address}')
 
-            self.client = pymongo.MongoClient("mongodb://mongo_db:27017/")
-            self.db = self.client["messages_db"]
-            self.messages = self.db["messages"]
+            client = pymongo.MongoClient(MONGO_DB_URI)
+            db = client["messages_db"]
+            messages = db["messages"]
 
-            while True:
-                received = sock.recv(1024)
-                if not received:
-                    break
+            received = sock.recv(MESSAGE_SIZE_MAX)
+            data = received.decode()
+            json_data = json.loads(data.replace("'", "\""))
+            messages.insert_one(json_data)
 
-                data = received.decode()
-                json_data = json.loads(data.replace("'", "\""))
-                self.messages.insert_one(json_data)
+            print(f'Message is saved: {received}')
 
-                #sock.send(received)
-                #print(f'Data send: {received}')
-
-            self.client.close()
+            client.close()
 
             print(f'Socket connection closed {address}')
 
@@ -126,7 +113,6 @@ class SocketServer:
             try:
                 while True:
                     new_sock, address = self.__server_socket.accept()
-                    #handle(new_sock, address)
                     client_pool.submit(handle, new_sock, address)
             except Exception as e:
                 print(e)
@@ -138,7 +124,7 @@ class SocketServer:
 
 
 def http_server_start():
-    http = HTTPServer(('', 3000), HttpHandler)
+    http = HTTPServer(('', HTTP_SERVER_PORT), HttpHandler)
     try:
         http.serve_forever()
     except KeyboardInterrupt:
